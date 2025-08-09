@@ -188,7 +188,8 @@ class ContentSearchEngine:
                             match_score=1.0
                         ))
                         
-            except (UnicodeDecodeError, PermissionError, FileNotFoundError):
+            except (UnicodeDecodeError, PermissionError, FileNotFoundError, OSError):
+                # Skip files that can't be read due to encoding, permissions, or other OS errors
                 continue
                 
         search_time = time.time() - start_time
@@ -241,6 +242,12 @@ class PythonDependencyAnalyzer:
         full_path = self.root_dir / file_path
         
         try:
+            # Check file size to avoid loading extremely large files
+            file_stats = full_path.stat()
+            if file_stats.st_size > 10 * 1024 * 1024:  # Skip files larger than 10MB
+                print(f"Warning: Skipping large file {file_path} ({file_stats.st_size} bytes)")
+                return []
+                
             with open(full_path, 'r', encoding='utf-8') as f:
                 source = f.read()
                 
@@ -250,7 +257,7 @@ class PythonDependencyAnalyzer:
             
             return analyzer.functions
             
-        except (SyntaxError, UnicodeDecodeError, FileNotFoundError) as e:
+        except (SyntaxError, UnicodeDecodeError, FileNotFoundError, OSError) as e:
             print(f"Warning: Could not parse {file_path}: {e}")
             return []
             
@@ -317,6 +324,11 @@ class PythonDependencyAnalyzer:
         # Topological sort to get correct order of user-defined functions
         ordered_user_deps = self._topological_sort(list(visited_resolved))
         
+        # Check for circular dependencies
+        if len(ordered_user_deps) < len(visited_resolved):
+            missing_funcs = set(visited_resolved) - set(ordered_user_deps)
+            print(f"Warning: Potential circular dependencies detected involving: {missing_funcs}")
+        
         # The final list of dependencies to show should be the ordered user-defined ones
         final_order = [f for f in ordered_user_deps]
         
@@ -349,7 +361,7 @@ class PythonDependencyAnalyzer:
             # Prefer matches where the class name seems plausible, but it's a guess.
             for func_name in self.functions:
                 if func_name.endswith(f".{method_name}"):
-                    return func_name # Return the first match found
+                    return func_name  # Return the first match found
 
         return None
         
@@ -796,6 +808,12 @@ Examples:
         
     if not os.path.exists(args.snippet):
         print(f"Error: Function snippet file not found: {args.snippet}", file=sys.stderr)
+        return 1
+    
+    # Validate file extensions
+    codebase_ext = Path(args.codebase).suffix.lower()
+    if codebase_ext not in ['.zip', '.whl']:
+        print(f"Error: Unsupported codebase file type: {codebase_ext}. Expected .zip or .whl", file=sys.stderr)
         return 1
         
     # Run analysis
