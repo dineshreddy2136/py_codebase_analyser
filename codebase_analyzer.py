@@ -33,6 +33,8 @@ from dataclasses import dataclass, field
 from collections import defaultdict, deque
 import shutil
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Try to import optional dependencies
 try:
@@ -174,6 +176,13 @@ class ContentSearchEngine:
                 
             try:
                 full_path = self.root_dir / file_path
+                
+                # Skip very large files to prevent memory issues
+                file_stats = full_path.stat()
+                if file_stats.st_size > 50 * 1024 * 1024:  # Skip files larger than 50MB
+                    print(f"Warning: Skipping large file {file_path} ({file_stats.st_size} bytes) in content search")
+                    continue
+                    
                 with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
                     
@@ -231,11 +240,13 @@ class ContentSearchEngine:
 class PythonDependencyAnalyzer:
     """Analyzes Python code dependencies using AST"""
     
-    def __init__(self, root_dir: str):
+    def __init__(self, root_dir: str, max_functions_in_memory: int = 10000):
         self.root_dir = Path(root_dir).resolve()
         self.functions: Dict[str, FunctionInfo] = {}
         self.classes: Dict[str, Dict[str, FunctionInfo]] = {}
         self.imports: Dict[str, Set[str]] = defaultdict(set)
+        self.max_functions_in_memory = max_functions_in_memory
+        self._lock = threading.Lock()  # For thread safety
         
     def analyze_file(self, file_path: str) -> List[FunctionInfo]:
         """Analyze a Python file and extract function information"""
@@ -262,7 +273,7 @@ class PythonDependencyAnalyzer:
             return []
             
     def analyze_codebase(self) -> None:
-        """Analyze the entire codebase"""
+        """Analyze the entire codebase with parallel processing for better performance"""
         python_files = []
         for root, _, files in os.walk(self.root_dir):
             for file in files:
@@ -273,9 +284,59 @@ class PythonDependencyAnalyzer:
                     
         print(f"Analyzing {len(python_files)} Python files...")
         
+        # Use parallel processing for large codebases
+        if len(python_files) > 10:
+            self._analyze_files_parallel(python_files)
+        else:
+            self._analyze_files_sequential(python_files)
+            
+    def _analyze_files_sequential(self, python_files: List[str]) -> None:
+        """Analyze files sequentially (for small codebases)"""
         for file_path in python_files:
             functions = self.analyze_file(file_path)
+            self._store_functions(functions)
+            
+    def _analyze_files_parallel(self, python_files: List[str]) -> None:
+        """Analyze files in parallel (for large codebases)"""
+        max_workers = min(8, len(python_files))  # Don't use too many threads
+        total_files = len(python_files)
+        processed_files = 0
+        
+        print(f"Using {max_workers} parallel workers for analysis...")
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all file analysis tasks
+            future_to_file = {
+                executor.submit(self.analyze_file, file_path): file_path 
+                for file_path in python_files
+            }
+            
+            # Collect results as they complete
+            for future in as_completed(future_to_file):
+                file_path = future_to_file[future]
+                try:
+                    functions = future.result()
+                    self._store_functions(functions)
+                    processed_files += 1
+                    
+                    # Progress reporting for large codebases
+                    if processed_files % 50 == 0 or processed_files == total_files:
+                        progress = (processed_files / total_files) * 100
+                        print(f"Progress: {processed_files}/{total_files} files analyzed ({progress:.1f}%)")
+                        
+                except Exception as e:
+                    print(f"Warning: Error processing {file_path}: {e}")
+                    processed_files += 1
+                    
+    def _store_functions(self, functions: List[FunctionInfo]) -> None:
+        """Store function information thread-safely with memory management"""
+        with self._lock:
             for func in functions:
+                # Memory management: warn if we're storing too many functions
+                if len(self.functions) >= self.max_functions_in_memory:
+                    print(f"Warning: Large codebase detected. {len(self.functions)} functions in memory. "
+                          f"Consider analyzing smaller chunks or increasing memory limits.")
+                
                 self.functions[func.name] = func
                 # Track classes
                 if '.' in func.name:
@@ -832,7 +893,13 @@ Examples:
             f.write(output)
         print(f"Results written to: {args.output}")
     else:
-        print(output)
+        # Handle Unicode encoding for Windows console
+        try:
+            print(output)
+        except UnicodeEncodeError:
+            # Fallback to ASCII-safe output
+            ascii_safe_output = output.encode('ascii', errors='replace').decode('ascii')
+            print(ascii_safe_output)
         
     return 0 if result.get('success') else 1
 
