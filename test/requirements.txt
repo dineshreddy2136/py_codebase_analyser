@@ -1,0 +1,12 @@
+# Optional dependencies for enhanced functionality
+
+# For .whl file support (recommended)
+wheel>=0.37.0
+
+# For advanced parsing support (future enhancement)
+# tree-sitter>=0.20.0
+# tree-sitter-python>=0.20.0
+# tree-sitter-javascript>=0.20.0
+
+# For better performance on large codebases (optional)
+# ujson>=5.0.0

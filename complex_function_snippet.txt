@@ -1,0 +1,11 @@
+def create_comprehensive_analysis_pipeline(raw_x_data, raw_y_data, dataset_name="Analysis"):
+    """
+    Complete analysis pipeline that demonstrates complex function dependencies
+    This function uses almost every other function in the codebase
+    """
+    # Initialize report
+    report = DataReport(dataset_name)
+    
+    # Step 1: Generate summary statistics for input data
+    x_summary = report.generate_summary_statistics(raw_x_data)
+    y_summary = report.generate_summary_statistics(raw_y_data)
