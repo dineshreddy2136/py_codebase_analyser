@@ -392,6 +392,31 @@ class PythonDependencyAnalyzer:
         return result
 
 
+class _CallFinder(ast.NodeVisitor):
+    """Find function calls within a function"""
+    
+    def __init__(self):
+        self.calls = set()
+        
+    def visit_Call(self, node):
+        if isinstance(node.func, ast.Name):
+            # Direct function calls like function_name() or ClassName()
+            self.calls.add(node.func.id)
+        elif isinstance(node.func, ast.Attribute):
+            # Handle method calls like obj.method()
+            if isinstance(node.func.value, ast.Name):
+                # Add both the method call and just the method name
+                method_call = f"{node.func.value.id}.{node.func.attr}"
+                self.calls.add(method_call)
+                # Also add just the method name for cross-reference
+                self.calls.add(node.func.attr)
+            else:
+                # Add just the method name for complex attribute access
+                self.calls.add(node.func.attr)
+                
+        self.generic_visit(node)
+
+
 class _PythonASTAnalyzer(ast.NodeVisitor):
     """AST visitor for analyzing Python function dependencies"""
     
@@ -757,31 +782,6 @@ class _TSJSAnalyzer:
         return signature.strip()
 
 
-class _CallFinder(ast.NodeVisitor):
-    """Find function calls within a function"""
-    
-    def __init__(self):
-        self.calls = set()
-        
-    def visit_Call(self, node):
-        if isinstance(node.func, ast.Name):
-            # Direct function calls like function_name() or ClassName()
-            self.calls.add(node.func.id)
-        elif isinstance(node.func, ast.Attribute):
-            # Handle method calls like obj.method()
-            if isinstance(node.func.value, ast.Name):
-                # Add both the method call and just the method name
-                method_call = f"{node.func.value.id}.{node.func.attr}"
-                self.calls.add(method_call)
-                # Also add just the method name for cross-reference
-                self.calls.add(node.func.attr)
-            else:
-                # Add just the method name for complex attribute access
-                self.calls.add(node.func.attr)
-                
-        self.generic_visit(node)
-
-
 class CodebaseExtractor:
     """Extract and manage codebase archives"""
     
@@ -1075,7 +1075,8 @@ class CodebaseDependencyAnalyzer:
             'total_dependencies': len(dependencies),
             'analysis_method': f'{language}_ast_based',
             'found_function_name': found_function_name,
-            'language': language
+            'language': language,
+            'raw_calls': sorted(list(all_deps))
         }
 
 
@@ -1155,6 +1156,13 @@ def _format_text_output(result: Dict[str, Any]) -> str:
         output.append(f"{i}. {dep_name}")
         
     output.append("")
+
+    if 'raw_calls' in deps and deps['raw_calls']:
+        output.append("Raw Detected Function/Method Calls:")
+        output.append("-" * 35)
+        output.append(", ".join(deps['raw_calls']))
+        output.append("")
+    
     output.append("Detailed Dependency Information:")
     output.append("-" * 35)
     
