@@ -2,17 +2,16 @@
 """
 Codebase Dependency Analyzer
 
-A comprehensive search application that processes codebases (.whl/.zip files)
+A comprehensive search application that processes Python codebases (.whl/.zip files)
 and analyzes function dependencies to output them in the correct order.
 
 Features:
 - Extract and process .whl/.zip codebases
 - Fast file search with pattern matching
 - Content search with regex support  
-- Function dependency analysis
+- Python function dependency analysis
 - Dependency resolution and ordering
 - Caching for improved performance
-- Multi-language support (Python, JavaScript, TypeScript, etc.)
 
 Usage:
     python codebase_dependency_analyzer.py <codebase.zip> <function_snippet.txt>
@@ -41,14 +40,6 @@ try:
     WHEEL_SUPPORT = True
 except ImportError:
     WHEEL_SUPPORT = False
-
-try:
-    from tree_sitter import Language, Parser
-    import tree_sitter_python
-    import tree_sitter_javascript
-    TREE_SITTER_SUPPORT = True
-except ImportError:
-    TREE_SITTER_SUPPORT = False
 
 
 @dataclass
@@ -91,7 +82,7 @@ class FileSearchEngine:
         self.cache_enabled = cache_enabled
         self._file_cache: Dict[str, List[str]] = {}
         self._ignore_patterns = {
-            '__pycache__', '*.pyc', '.git', '.svn', 'node_modules',
+            '__pycache__', '*.pyc', '.git', '.svn',
             '.DS_Store', '*.log', '.pytest_cache', '.mypy_cache'
         }
         self._all_files: Optional[List[str]] = None
@@ -221,7 +212,7 @@ class ContentSearchEngine:
         
     def _get_all_text_files(self) -> List[str]:
         """Get all text files for searching"""
-        text_extensions = {'.py', '.js', '.ts', '.java', '.cpp', '.c', '.h',
+        text_extensions = {'.py', '.java', '.cpp', '.c', '.h',
                           '.txt', '.md', '.rst', '.json', '.yaml', '.yml',
                           '.xml', '.html', '.css', '.sql', '.sh', '.bat'}
         
@@ -517,271 +508,6 @@ class _PythonASTAnalyzer(ast.NodeVisitor):
         return f"{node.name}({', '.join(args)})"
 
 
-class TypeScriptJavaScriptDependencyAnalyzer:
-    """Analyzes TypeScript/JavaScript code dependencies using regex parsing"""
-    
-    def __init__(self, root_dir: str):
-        self.root_dir = Path(root_dir).resolve()
-        self.functions: Dict[str, FunctionInfo] = {}
-        self.classes: Dict[str, Dict[str, FunctionInfo]] = {}
-        self.imports: Dict[str, Set[str]] = defaultdict(set)
-        
-    def analyze_file(self, file_path: str) -> List[FunctionInfo]:
-        """Analyze a TypeScript/JavaScript file and extract function information"""
-        full_path = self.root_dir / file_path
-        
-        try:
-            with open(full_path, 'r', encoding='utf-8') as f:
-                source = f.read()
-                
-            analyzer = _TSJSAnalyzer(file_path, source)
-            return analyzer.analyze()
-            
-        except (UnicodeDecodeError, FileNotFoundError) as e:
-            print(f"Warning: Could not parse {file_path}: {e}")
-            return []
-            
-    def analyze_codebase(self) -> None:
-        """Analyze the entire codebase"""
-        js_files = []
-        for root, _, files in os.walk(self.root_dir):
-            for file in files:
-                if file.endswith(('.js', '.ts', '.jsx', '.tsx')):
-                    file_path = Path(root) / file
-                    rel_path = file_path.relative_to(self.root_dir)
-                    js_files.append(str(rel_path))
-                    
-        print(f"Analyzing {len(js_files)} TypeScript/JavaScript files...")
-        
-        for file_path in js_files:
-            functions = self.analyze_file(file_path)
-            for func in functions:
-                self.functions[func.name] = func
-                # Track classes
-                if '.' in func.name:
-                    class_name = func.name.split('.')[0]
-                    if class_name not in self.classes:
-                        self.classes[class_name] = {}
-                    method_name = func.name.split('.')[1]
-                    self.classes[class_name][method_name] = func
-                    
-    def find_function_dependencies(self, function_name: str) -> List[str]:
-        """Find all dependencies for a function in correct order"""
-        if function_name not in self.functions:
-            print(f"Function '{function_name}' not found in analyzed functions")
-            print(f"Available functions: {list(self.functions.keys())}")
-            return []
-            
-        dependencies = set()
-        visited = set()
-        
-        def dfs(func_name: str):
-            if func_name in visited:
-                return
-                
-            visited.add(func_name)
-            
-            if func_name in self.functions:
-                func_info = self.functions[func_name]
-                print(f"Analyzing dependencies for {func_name}: {func_info.dependencies}")
-                
-                for dep in func_info.dependencies:
-                    if dep in self.functions and dep not in visited:
-                        dependencies.add(dep)
-                        dfs(dep)
-                        
-        dfs(function_name)
-        
-        # Topological sort to get correct order
-        ordered_deps = self._topological_sort(list(dependencies) + [function_name])
-        print(f"Final dependency order: {ordered_deps}")
-        return ordered_deps
-        
-    def _topological_sort(self, func_names: List[str]) -> List[str]:
-        """Sort functions in dependency order"""
-        in_degree = {name: 0 for name in func_names}
-        graph = {name: [] for name in func_names}
-        
-        # Build dependency graph
-        for func_name in func_names:
-            if func_name in self.functions:
-                func_info = self.functions[func_name]
-                for dep in func_info.dependencies:
-                    if dep in func_names:
-                        graph[dep].append(func_name)
-                        in_degree[func_name] += 1
-                        
-        # Kahn's algorithm
-        queue = deque([name for name in func_names if in_degree[name] == 0])
-        result = []
-        
-        while queue:
-            current = queue.popleft()
-            result.append(current)
-            
-            for neighbor in graph[current]:
-                in_degree[neighbor] -= 1
-                if in_degree[neighbor] == 0:
-                    queue.append(neighbor)
-                    
-        return result
-
-
-class _TSJSAnalyzer:
-    """Analyzer for TypeScript/JavaScript function dependencies using regex"""
-    
-    def __init__(self, file_path: str, source: str):
-        self.file_path = file_path
-        self.source = source
-        self.source_lines = source.splitlines()
-        self.functions: List[FunctionInfo] = []
-        self.imports = set()
-        
-    def analyze(self) -> List[FunctionInfo]:
-        """Analyze the source code and extract function information"""
-        # Find imports
-        self._extract_imports()
-        
-        # Find function declarations
-        self._extract_functions()
-        
-        return self.functions
-        
-    def _extract_imports(self):
-        """Extract import statements"""
-        import_patterns = [
-            r'import\s+.*?\s+from\s+[\'"]([^\'"]+)[\'"]',
-            r'import\s*\{\s*([^}]+)\s*\}\s*from\s+[\'"]([^\'"]+)[\'"]',
-            r'import\s*\*\s*as\s+(\w+)\s*from\s+[\'"]([^\'"]+)[\'"]',
-            r'const\s+.*?\s*=\s*require\s*\(\s*[\'"]([^\'"]+)[\'"]\s*\)',
-        ]
-        
-        for pattern in import_patterns:
-            matches = re.findall(pattern, self.source, re.MULTILINE)
-            for match in matches:
-                if isinstance(match, tuple):
-                    self.imports.update(match)
-                else:
-                    self.imports.add(match)
-                    
-    def _extract_functions(self):
-        """Extract function declarations and their dependencies"""
-        # Function patterns to match - improved patterns with DOTALL for multiline matching
-        function_patterns = [
-            # Export functions: export async function name() { } - with multiline support
-            (r'export\s+(?:async\s+)?function\s+(\w+)\s*\([^)]*\)(?:\s*:\s*[^{]+)?\s*{', 'export_function'),
-            # Regular functions: function name() { }
-            (r'(?:^|\s)(?:async\s+)?function\s+(\w+)\s*\([^)]*\)(?:\s*:\s*[^{]+)?\s*{', 'function'),
-            # Arrow functions: const name = () => { } or const name = async () => { }
-            (r'(?:^|\s)const\s+(\w+)\s*=\s*(?:async\s+)?\([^)]*\)(?:\s*:\s*[^{=]+)?\s*=>\s*{', 'arrow_function'),
-            # Arrow functions: const name = () => expression
-            (r'(?:^|\s)const\s+(\w+)\s*=\s*(?:async\s+)?\([^)]*\)(?:\s*:\s*[^=]+)?\s*=>\s*[^{]', 'arrow_expression'),
-            # Method definitions in classes: methodName() { }
-            (r'(?:^|\s{2,})(?:async\s+)?(\w+)\s*\([^)]*\)(?:\s*:\s*[^{]+)?\s*{\s*$', 'method'),
-        ]
-        
-        for pattern, func_type in function_patterns:
-            # Use DOTALL flag to match across lines
-            for match in re.finditer(pattern, self.source, re.MULTILINE | re.DOTALL):
-                func_name = match.group(1)
-                
-                # Skip common control flow keywords that might be incorrectly matched
-                if func_name in {'if', 'for', 'while', 'catch', 'switch', 'try', 'else', 'do', 'return'}:
-                    continue
-                    
-                start_pos = match.start()
-                
-                # Find the line number
-                line_number = self.source[:start_pos].count('\n') + 1
-                
-                # Extract function body based on type
-                if func_type == 'arrow_expression':
-                    # For arrow expressions, just get the line
-                    function_source = self.source_lines[line_number - 1]
-                else:
-                    # Extract function body for functions with braces
-                    function_source = self._extract_function_body(match.start())
-                
-                # Find function calls within this function
-                dependencies = self._find_function_calls(function_source)
-                
-                # Create function info
-                func_info = FunctionInfo(
-                    name=func_name,
-                    file_path=self.file_path,
-                    line_number=line_number,
-                    source_code=function_source,
-                    dependencies=dependencies,
-                    calls=dependencies,
-                    imports=self.imports.copy(),
-                    signature=self._extract_signature(match.group(0)),
-                    docstring=""
-                )
-                
-                self.functions.append(func_info)
-                print(f"Extracted TS/JS function: {func_name} with dependencies: {dependencies}")
-                
-    def _extract_function_body(self, start_pos: int) -> str:
-        """Extract the complete function body"""
-        brace_count = 0
-        started = False
-        end_pos = start_pos
-        
-        for i, char in enumerate(self.source[start_pos:], start_pos):
-            if char == '{':
-                brace_count += 1
-                started = True
-            elif char == '}':
-                brace_count -= 1
-                
-            if started and brace_count == 0:
-                end_pos = i + 1
-                break
-                
-        return self.source[start_pos:end_pos]
-        
-    def _find_function_calls(self, function_body: str) -> Set[str]:
-        """Find function calls within a function body"""
-        calls = set()
-        
-        # Pattern to match function calls - improved to avoid false positives
-        call_patterns = [
-            # Regular function calls: functionName(
-            r'(?<![.\w])(\w+)\s*\(',
-            # Method calls: .methodName( - but we'll filter these to avoid noise
-            # r'\.(\w+)\s*\(',
-            # Await calls: await functionName(
-            r'await\s+(\w+)\s*\(',
-        ]
-        
-        for pattern in call_patterns:
-            matches = re.findall(pattern, function_body)
-            for match in matches:
-                if isinstance(match, str) and match:
-                    # Filter out common keywords, built-ins, and control structures
-                    excluded = {
-                        'if', 'for', 'while', 'switch', 'try', 'catch', 'throw',
-                        'return', 'break', 'continue', 'var', 'let', 'const',
-                        'function', 'async', 'await', 'new', 'typeof', 'instanceof',
-                        'console', 'log', 'error', 'warn', 'debug', 'info',
-                        'parseInt', 'parseFloat', 'isNaN', 'setTimeout', 'setInterval',
-                        'Promise', 'Array', 'Object', 'String', 'Number', 'Boolean',
-                        'Math', 'Date', 'RegExp', 'Error', 'JSON'
-                    }
-                    
-                    if match not in excluded and len(match) > 1:
-                        calls.add(match)
-                    
-        return calls
-        
-    def _extract_signature(self, func_declaration: str) -> str:
-        """Extract function signature"""
-        # Remove 'export' and 'async' keywords for cleaner signature
-        signature = re.sub(r'export\s+', '', func_declaration)
-        signature = re.sub(r'async\s+', '', signature)
-        return signature.strip()
-
-
 class CodebaseExtractor:
     """Extract and manage codebase archives"""
     
@@ -874,28 +600,20 @@ class CodebaseDependencyAnalyzer:
             self.extractor.cleanup()
             
     def _detect_codebase_language(self) -> str:
-        """Detect the primary language of the codebase"""
-        file_counts = defaultdict(int)
+        """Detect the primary language of the codebase - focuses on Python"""
+        python_files = 0
         
         for root, _, files in os.walk(self.extracted_dir):
             for file in files:
-                ext = Path(file).suffix.lower()
-                if ext in ['.py']:
-                    file_counts['python'] += 1
-                elif ext in ['.js', '.ts', '.jsx', '.tsx']:
-                    file_counts['typescript_javascript'] += 1
-                elif ext in ['.java']:
-                    file_counts['java'] += 1
-                elif ext in ['.cpp', '.c', '.h']:
-                    file_counts['cpp'] += 1
+                if file.endswith('.py'):
+                    python_files += 1
                     
-        if not file_counts:
+        if python_files > 0:
+            print(f"Detected Python codebase with {python_files} Python files")
+            return 'python'
+        else:
+            print("No Python files detected in codebase")
             return 'unknown'
-            
-        # Return the language with the most files
-        primary_language = max(file_counts.items(), key=lambda x: x[1])[0]
-        print(f"Detected codebase language: {primary_language} (file counts: {dict(file_counts)})")
-        return primary_language
             
     def _find_function_in_codebase(self, function_snippet: str) -> Optional[Dict[str, Any]]:
         """Find the function in the extracted codebase"""
@@ -909,7 +627,7 @@ class CodebaseDependencyAnalyzer:
         function_name = self._extract_function_name(function_snippet, snippet_language)
         if not function_name:
             # Fallback to content search
-            file_patterns = ['*.py', '*.js', '*.ts', '*.jsx', '*.tsx']
+            file_patterns = ['*.py']
             search_result = content_search.search_content(
                 function_snippet[:100],  # Search first 100 chars
                 file_patterns=file_patterns,
@@ -928,25 +646,13 @@ class CodebaseDependencyAnalyzer:
                 
             return None
             
-        # Search for function definition based on detected language
-        if snippet_language == 'typescript_javascript':
-            search_patterns = [
-                f"function\\s+{function_name}\\s*\\(",
-                f"async\\s+function\\s+{function_name}\\s*\\(",
-                f"export\\s+function\\s+{function_name}\\s*\\(",
-                f"export\\s+async\\s+function\\s+{function_name}\\s*\\(",
-                f"const\\s+{function_name}\\s*=\\s*\\(",
-                f"const\\s+{function_name}\\s*=\\s*async\\s*\\(",
-                f"{function_name}\\s*\\([^)]*\\)\\s*{{",  # Method definition
-            ]
-            file_patterns = ['*.js', '*.ts', '*.jsx', '*.tsx']
-        else:
-            search_patterns = [
-                f"def\\s+{function_name}\\s*\\(",
-                f"async\\s+def\\s+{function_name}\\s*\\(",
-                f"class.*{function_name}.*:",
-            ]
-            file_patterns = ['*.py']
+        # Search for function definition - Python only
+        search_patterns = [
+            f"def\\s+{function_name}\\s*\\(",
+            f"async\\s+def\\s+{function_name}\\s*\\(",
+            f"class.*{function_name}.*:",
+        ]
+        file_patterns = ['*.py']
         
         for pattern in search_patterns:
             search_result = content_search.search_content(
@@ -970,41 +676,30 @@ class CodebaseDependencyAnalyzer:
         
     def _detect_snippet_language(self, snippet: str) -> str:
         """Detect the language of the function snippet"""
-        # TypeScript/JavaScript indicators
-        if any(keyword in snippet for keyword in ['export async function', 'export function', 'const ', '=>', 'Promise<']):
-            return 'typescript_javascript'
         # Python indicators    
-        elif any(keyword in snippet for keyword in ['def ', 'async def', 'import ', 'from ']):
+        if any(keyword in snippet for keyword in ['def ', 'async def', 'import ', 'from ']):
             return 'python'
-        # Default to typescript_javascript for ambiguous cases
+        # Default to python for ambiguous cases
         else:
-            return 'typescript_javascript'
+            return 'python'
         
     def _extract_function_name(self, snippet: str, language: str = 'python') -> Optional[str]:
         """Extract function name from code snippet"""
-        if language == 'typescript_javascript':
-            # TypeScript/JavaScript patterns
-            patterns = [
-                r'(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\(',
-                r'(?:export\s+)?const\s+(\w+)\s*=\s*(?:async\s+)?\(',
-                r'(?:async\s+)?(\w+)\s*\([^)]*\)\s*{',  # Method definition
-            ]
-        else:
-            # Try to parse as Python code first
-            try:
-                tree = ast.parse(snippet)
-                for node in ast.walk(tree):
-                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        return node.name
-            except SyntaxError:
-                pass
-                
-            # Fallback to regex for Python
-            patterns = [
-                r'def\s+(\w+)\s*\(',
-                r'async\s+def\s+(\w+)\s*\(',
-                r'class\s+(\w+).*:',
-            ]
+        # Try to parse as Python code first
+        try:
+            tree = ast.parse(snippet)
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    return node.name
+        except SyntaxError:
+            pass
+            
+        # Fallback to regex for Python
+        patterns = [
+            r'def\s+(\w+)\s*\(',
+            r'async\s+def\s+(\w+)\s*\(',
+            r'class\s+(\w+).*:',
+        ]
         
         for pattern in patterns:
             match = re.search(pattern, snippet)
@@ -1015,14 +710,8 @@ class CodebaseDependencyAnalyzer:
         
     def _analyze_dependencies(self, function_info: Dict[str, Any]) -> Dict[str, Any]:
         """Analyze function dependencies"""
-        # Detect the language based on the codebase
-        language = self._detect_codebase_language()
-        
-        if language == 'typescript_javascript':
-            analyzer = TypeScriptJavaScriptDependencyAnalyzer(self.extracted_dir)
-        else:
-            analyzer = PythonDependencyAnalyzer(self.extracted_dir)
-            
+        # Only analyze Python codebases
+        analyzer = PythonDependencyAnalyzer(self.extracted_dir)
         analyzer.analyze_codebase()
         
         function_name = function_info['function_name']
@@ -1047,7 +736,7 @@ class CodebaseDependencyAnalyzer:
                 'dependency_order': [],
                 'detailed_dependencies': [],
                 'total_dependencies': 0,
-                'analysis_method': f'{language}_function_not_found',
+                'analysis_method': 'python_function_not_found',
                 'error': f'Function {function_name} not found in analyzed functions'
             }
         
@@ -1073,9 +762,9 @@ class CodebaseDependencyAnalyzer:
             'dependency_order': dependencies,
             'detailed_dependencies': detailed_dependencies,
             'total_dependencies': len(dependencies),
-            'analysis_method': f'{language}_ast_based',
+            'analysis_method': 'python_ast_based',
             'found_function_name': found_function_name,
-            'language': language,
+            'language': 'python',
             'raw_calls': sorted(list(all_deps))
         }
 
@@ -1083,7 +772,7 @@ class CodebaseDependencyAnalyzer:
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(
-        description='Analyze codebase dependencies from function snippet',
+        description='Analyze Python codebase dependencies from function snippet',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
